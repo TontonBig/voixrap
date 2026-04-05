@@ -588,6 +588,19 @@ if st.button("⚡ TRAITER MA VOIX"):
     wav_bytes = build_wav(left, right, sr)
     nom = uploaded.name.rsplit(".", 1)[0] + f"_voixrap_v6_{wet_pct}pct.wav"
 
+    # ── Lecteurs audio avant/après ──
+    st.markdown("<h3>🎧 Écoute avant / après</h3>", unsafe_allow_html=True)
+    col_avant, col_apres = st.columns(2)
+    with col_avant:
+        st.markdown("<p style='color:#555;font-size:11px;letter-spacing:2px'>AVANT — VOIX BRUTE</p>", unsafe_allow_html=True)
+        # Export mono brut en WAV pour lecture
+        dry_norm = peak_normalize(x.copy(), -0.3)
+        wav_dry = build_wav(dry_norm, dry_norm, sr)
+        st.audio(wav_dry, format="audio/wav")
+    with col_apres:
+        st.markdown("<p style='color:#00ff88;font-size:11px;letter-spacing:2px'>APRÈS — VOIX TRAITÉE</p>", unsafe_allow_html=True)
+        st.audio(wav_bytes, format="audio/wav")
+
     st.download_button(
         label="⬇ TÉLÉCHARGER MA VOIX",
         data=wav_bytes,
