@@ -431,13 +431,17 @@ if uploaded is None:
 if st.button("⚡ TRAITER MA VOIX"):
 
     try:
-        from pydub import AudioSegment
-        audio = AudioSegment.from_file(uploaded)
-        sr    = audio.frame_rate
-        sw    = audio.sample_width
-        raw   = to_mono(np.array(audio.get_array_of_samples()), audio.channels)
-        x     = pcm_to_float(raw, sw)
-        x     = (x - float(np.mean(x))).astype(np.float32)
+        import librosa, soundfile as sf, tempfile, os
+        # Sauvegarde temporaire
+        suffix = "." + uploaded.name.rsplit(".", 1)[-1]
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+            tmp.write(uploaded.read())
+            tmp_path = tmp.name
+        # Librosa charge tout format (mp3, wav, flac, m4a, ogg)
+        x, sr = librosa.load(tmp_path, sr=44100, mono=True)
+        x = x.astype(np.float32)
+        x = (x - float(np.mean(x))).astype(np.float32)
+        os.unlink(tmp_path)
     except Exception as e:
         st.error(f"❌ Impossible de lire le fichier : {e}")
         st.stop()
