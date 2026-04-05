@@ -375,7 +375,7 @@ def generer_diagnostic(a):
 #  TRAITEMENT ADAPTATIF
 # ═══════════════════════════════════════════════════
 
-def traiter_prise(x, sr, a, wet=1.0, reverb_amount=0.0, delay_amount=0.0):
+def traiter_prise(x, sr, a, wet=1.0, graves_db=-6, comp_pct=0.5, presence_db=2):
     """
     Traitement 100% adaptatif basé sur l'analyse.
     wet = 0.0 (brut) à 1.0 (traitement complet)
@@ -393,27 +393,20 @@ def traiter_prise(x, sr, a, wet=1.0, reverb_amount=0.0, delay_amount=0.0):
     proc = apply_hpf(proc, sr, hpf_freq)
 
     # ── 2. EQ correctif adaptatif ────────────────────
-    # Coupe graves si problème détecté
-    if a['graves'] > 30:
-        gain_cut = max(-12.0, -(a['graves'] - 15) * 0.4)  # jusqu'à -12dB
-        proc = apply_eq(proc, sr, a['grave_freq'], 1.2, gain_cut * wet)
+    # Coupe graves — contrôlée par le slider GRAVES
+    grave_cut = graves_db * wet  # slider de -12 à 0 dB
+    proc = apply_eq(proc, sr, a['grave_freq'], 1.2, grave_cut)
 
-    # Coupe boue lo-mid
+    # Coupe boue lo-mid adaptative
     if a['lo_mid'] > 30:
         gain_mud = max(-8.0, -(a['lo_mid'] - 20) * 0.3)
         proc = apply_eq(proc, sr, 380, 1.5, gain_mud * wet)
-
-    # Coupe présence si trop agressive
-    if a['presence'] > 35:
-        proc = apply_eq(proc, sr, 3500, 1.0, -3.0 * wet)
 
     # Safety après coupures
     proc = peak_normalize(proc, -0.5)
 
     # ── 3. Saturation harmonique ─────────────────────
-    # Compense l'absence de préamp (home studio / téléphone)
-    # Plus de saturation si signal plat (faible crest factor)
-    drive = 4.0 if a['crest'] < 12 else 2.5
+    drive   = 4.0 if a['crest'] < 12 else 2.5
     mix_sat = 0.14 if a['crest'] < 12 else 0.08
     proc = apply_saturation(proc, drive_db=drive * wet, mix=mix_sat * wet)
 
@@ -422,35 +415,31 @@ def traiter_prise(x, sr, a, wet=1.0, reverb_amount=0.0, delay_amount=0.0):
         amount = max(-8.0, -(a['sib_zone'] - 10) * 0.3)
         proc = apply_deesser(proc, sr, a['sib_freq'], amount * wet)
 
-    # ── 5. EQ boost présence et air ──────────────────
-    # Boost présence si manque
-    if a['presence'] < 15:
-        proc = apply_eq(proc, sr, 3500, 1.0, 3.5 * wet)
-    else:
-        proc = apply_eq(proc, sr, 3500, 1.0, 2.0 * wet)
+    # ── 5. EQ boost présence — contrôlé par slider ───
+    proc = apply_eq(proc, sr, 3500, 1.0, presence_db * wet)
 
-    # Air / brillance
-    if a['air'] < 3:
-        proc = apply_eq(proc, sr, 10000, 0.8, 3.5 * wet)
-    else:
-        proc = apply_eq(proc, sr, 10000, 0.8, 2.0 * wet)
+    # Air / brillance adaptatif
+    air_boost = 3.5 if a['air'] < 3 else 2.0
+    proc = apply_eq(proc, sr, 10000, 0.8, air_boost * wet)
 
     proc = peak_normalize(proc, -0.5)
 
-    # ── 6. Compression 1 — Maintien (ratio léger) ────
-    # Comme une automation de volume
-    ra1  = rms_act(proc, sr)
-    thr1 = max(-32., min(-8., ra1 - 2.0))
-    ratio1 = 2.5 if a['deja_compresse'] else 3.5
-    proc = apply_compressor(proc, sr, thr1, ratio1, 15, 150, 4 * wet)
+    # ── 6. Compression 1 — Maintien ──────────────────
+    # comp_pct 0.0=léger → 1.0=agressif
+    ratio1 = 2.0 + comp_pct * 2.0   # 2:1 à 4:1
+    atk1   = 20 - comp_pct * 15     # 20ms à 5ms
+    rel1   = 200 - comp_pct * 120   # 200ms à 80ms
+    ra1    = rms_act(proc, sr)
+    thr1   = max(-32., min(-8., ra1 - 2.0))
+    proc   = apply_compressor(proc, sr, thr1, ratio1, atk1, rel1, 4 * wet)
 
     # ── 7. Compression 2 — RVox style ────────────────
-    # Plus agressive pour coller la voix dans le mix
-    ra2   = rms_act(proc, sr)
-    thr2  = max(-32., min(-6., ra2 - 1.5))
-    ratio2 = 4.0 if a['deja_compresse'] else 6.0
-    mg2   = max(2.0, min(12.0, (-10 - ra2) + (ra2 - thr2) * (1 - 1/ratio2)))
-    proc  = apply_compressor(proc, sr, thr2, ratio2, 5, 80, mg2 * wet)
+    ratio2 = 4.0 + comp_pct * 4.0   # 4:1 à 8:1
+    atk2   = 8 - comp_pct * 6       # 8ms à 2ms
+    ra2    = rms_act(proc, sr)
+    thr2   = max(-32., min(-6., ra2 - 1.5))
+    mg2    = max(2.0, min(14.0, (-10 - ra2) + (ra2 - thr2) * (1 - 1/ratio2)))
+    proc   = apply_compressor(proc, sr, thr2, ratio2, atk2, 80, mg2 * wet)
 
     # ── 8. Safety peak ───────────────────────────────
     proc = peak_normalize(proc, -0.5)
@@ -570,26 +559,28 @@ for emoji, titre, detail in diag:
 
 st.markdown("<hr style='border-color:#222;margin:24px 0'>", unsafe_allow_html=True)
 
-# ── SLIDER WET/DRY ───────────────────────────────────
+# ── RÉGLAGES ─────────────────────────────────────────
 st.markdown("<h3>🎚️ Réglages</h3>", unsafe_allow_html=True)
 
-col_s1, col_s2, col_s3 = st.columns(3)
+col_s1, col_s2, col_s3, col_s4 = st.columns(4)
 with col_s1:
     st.markdown("<p style='color:#ff3c3c;font-size:10px;letter-spacing:2px;margin-bottom:4px'>⚡ TRAITEMENT</p>", unsafe_allow_html=True)
     st.markdown("<p style='color:#444;font-size:9px'>0% brut → 100% full</p>", unsafe_allow_html=True)
     wet_pct = st.slider("wet", 0, 100, 100, 5, format="%d%%", label_visibility="collapsed")
 with col_s2:
-    st.markdown("<p style='color:#4488ff;font-size:10px;letter-spacing:2px;margin-bottom:4px'>🌊 REVERB</p>", unsafe_allow_html=True)
-    st.markdown("<p style='color:#444;font-size:9px'>Espace — plate courte</p>", unsafe_allow_html=True)
-    reverb_pct = st.slider("reverb", 0, 100, 20, 5, format="%d%%", label_visibility="collapsed")
+    st.markdown("<p style='color:#ff8c00;font-size:10px;letter-spacing:2px;margin-bottom:4px'>🔉 GRAVES</p>", unsafe_allow_html=True)
+    st.markdown("<p style='color:#444;font-size:9px'>Coupe les basses</p>", unsafe_allow_html=True)
+    graves_db = st.slider("graves", -12, 0, -6, 1, format="%d dB", label_visibility="collapsed")
 with col_s3:
-    st.markdown("<p style='color:#ff8c00;font-size:10px;letter-spacing:2px;margin-bottom:4px'>🔁 DELAY</p>", unsafe_allow_html=True)
-    st.markdown("<p style='color:#444;font-size:9px'>80ms — présence</p>", unsafe_allow_html=True)
-    delay_pct = st.slider("delay", 0, 100, 15, 5, format="%d%%", label_visibility="collapsed")
+    st.markdown("<p style='color:#ffd700;font-size:10px;letter-spacing:2px;margin-bottom:4px'>🗜️ COMPRESSION</p>", unsafe_allow_html=True)
+    st.markdown("<p style='color:#444;font-size:9px'>Léger → Agressif</p>", unsafe_allow_html=True)
+    comp_pct = st.slider("comp", 0, 100, 50, 5, format="%d%%", label_visibility="collapsed")
+with col_s4:
+    st.markdown("<p style='color:#00ff88;font-size:10px;letter-spacing:2px;margin-bottom:4px'>✨ PRÉSENCE</p>", unsafe_allow_html=True)
+    st.markdown("<p style='color:#444;font-size:9px'>Voix en avant</p>", unsafe_allow_html=True)
+    presence_db = st.slider("presence", -3, 6, 2, 1, format="%d dB", label_visibility="collapsed")
 
-wet = wet_pct / 100.0
-reverb_amount = reverb_pct / 100.0
-delay_amount  = delay_pct  / 100.0
+wet          = wet_pct / 100.0
 
 # ── TRAITEMENT ───────────────────────────────────────
 if st.button("⚡ TRAITER MA VOIX"):
@@ -603,7 +594,7 @@ if st.button("⚡ TRAITER MA VOIX"):
         prog.progress(80, text="🎧 Espace stéréo...")
         prog.progress(92, text="🛑 Limiteur final...")
 
-        left, right = traiter_prise(x, sr, a, wet, reverb_amount=reverb_amount, delay_amount=delay_amount)
+        left, right = traiter_prise(x, sr, a, wet, graves_db=graves_db, comp_pct=comp_pct/100, presence_db=presence_db)
 
         prog.progress(100, text="✅ Terminé !")
 
