@@ -444,45 +444,6 @@ def traiter_prise(x, sr, a, wet=1.0, graves_db=-6, comp_pct=0.5, presence_db=2):
     # ── 8. Safety peak ───────────────────────────────
     proc = peak_normalize(proc, -0.5)
 
-    # ── 8b. Reverb plate courte ──────────────────────
-    if reverb_amount > 0:
-        delays_ms = [18, 25, 35, 44, 55, 67]
-        gains     = [0.45, 0.38, 0.32, 0.28, 0.22, 0.18]
-        rev = np.zeros(len(proc) + int(sr*0.5), dtype=np.float32)
-        rev[:len(proc)] += proc
-        for d_ms, g in zip(delays_ms, gains):
-            d = int(sr * d_ms / 1000)
-            rev[d:d+len(proc)] += proc * g
-        # Decay tail
-        tail_len = int(sr * 0.4)
-        decay = np.exp(-np.arange(tail_len) / (sr * 0.10))
-        for i in range(min(tail_len, len(rev)-len(proc))):
-            rev[len(proc)+i] += proc[-1] * decay[i] * 0.2
-        rev = rev[:len(proc)]
-        # Filtre la reverb — HPF 200Hz + LPF 7kHz
-        bh, ah = signal.butter(2, 200./(sr/2), btype='highpass')
-        bl, al = signal.butter(2, 7000./(sr/2), btype='lowpass')
-        wet_rev = signal.lfilter(bh, ah, (rev - proc)).astype(np.float32)
-        wet_rev = signal.lfilter(bl, al, wet_rev).astype(np.float32)
-        proc = peak_normalize((proc + wet_rev * reverb_amount * wet).astype(np.float32), -0.5)
-
-    # ── 8c. Delay 80ms filtré ────────────────────────
-    if delay_amount > 0:
-        d = int(sr * 0.080)
-        feedback = 0.30
-        dly = np.zeros(len(proc), dtype=np.float32)
-        for rep in range(1, 4):
-            offset = d * rep
-            g = feedback ** rep
-            if offset < len(proc):
-                dly[offset:] += proc[:len(proc)-offset] * g
-        # Filtre delay — HPF 300Hz + LPF 6kHz
-        bh2, ah2 = signal.butter(2, 300./(sr/2), btype='highpass')
-        bl2, al2 = signal.butter(2, 6000./(sr/2), btype='lowpass')
-        dly = signal.lfilter(bh2, ah2, dly).astype(np.float32)
-        dly = signal.lfilter(bl2, al2, dly).astype(np.float32)
-        proc = peak_normalize((proc + dly * delay_amount * wet).astype(np.float32), -0.5)
-
     # ── 9. Widener ───────────────────────────────────
     width = 0.20 * wet
     left, right = apply_widener(proc, sr, width)
