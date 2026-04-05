@@ -375,7 +375,7 @@ def generer_diagnostic(a):
 #  TRAITEMENT ADAPTATIF
 # ═══════════════════════════════════════════════════
 
-def traiter_prise(x, sr, a, wet=1.0):
+def traiter_prise(x, sr, a, wet=1.0, reverb_amount=0.0, delay_amount=0.0):
     """
     Traitement 100% adaptatif basé sur l'analyse.
     wet = 0.0 (brut) à 1.0 (traitement complet)
@@ -455,6 +455,45 @@ def traiter_prise(x, sr, a, wet=1.0):
     # ── 8. Safety peak ───────────────────────────────
     proc = peak_normalize(proc, -0.5)
 
+    # ── 8b. Reverb plate courte ──────────────────────
+    if reverb_amount > 0:
+        delays_ms = [18, 25, 35, 44, 55, 67]
+        gains     = [0.45, 0.38, 0.32, 0.28, 0.22, 0.18]
+        rev = np.zeros(len(proc) + int(sr*0.5), dtype=np.float32)
+        rev[:len(proc)] += proc
+        for d_ms, g in zip(delays_ms, gains):
+            d = int(sr * d_ms / 1000)
+            rev[d:d+len(proc)] += proc * g
+        # Decay tail
+        tail_len = int(sr * 0.4)
+        decay = np.exp(-np.arange(tail_len) / (sr * 0.10))
+        for i in range(min(tail_len, len(rev)-len(proc))):
+            rev[len(proc)+i] += proc[-1] * decay[i] * 0.2
+        rev = rev[:len(proc)]
+        # Filtre la reverb — HPF 200Hz + LPF 7kHz
+        bh, ah = signal.butter(2, 200./(sr/2), btype='highpass')
+        bl, al = signal.butter(2, 7000./(sr/2), btype='lowpass')
+        wet_rev = signal.lfilter(bh, ah, (rev - proc)).astype(np.float32)
+        wet_rev = signal.lfilter(bl, al, wet_rev).astype(np.float32)
+        proc = peak_normalize((proc + wet_rev * reverb_amount * wet).astype(np.float32), -0.5)
+
+    # ── 8c. Delay 80ms filtré ────────────────────────
+    if delay_amount > 0:
+        d = int(sr * 0.080)
+        feedback = 0.30
+        dly = np.zeros(len(proc), dtype=np.float32)
+        for rep in range(1, 4):
+            offset = d * rep
+            g = feedback ** rep
+            if offset < len(proc):
+                dly[offset:] += proc[:len(proc)-offset] * g
+        # Filtre delay — HPF 300Hz + LPF 6kHz
+        bh2, ah2 = signal.butter(2, 300./(sr/2), btype='highpass')
+        bl2, al2 = signal.butter(2, 6000./(sr/2), btype='lowpass')
+        dly = signal.lfilter(bh2, ah2, dly).astype(np.float32)
+        dly = signal.lfilter(bl2, al2, dly).astype(np.float32)
+        proc = peak_normalize((proc + dly * delay_amount * wet).astype(np.float32), -0.5)
+
     # ── 9. Widener ───────────────────────────────────
     width = 0.20 * wet
     left, right = apply_widener(proc, sr, width)
@@ -532,20 +571,25 @@ for emoji, titre, detail in diag:
 st.markdown("<hr style='border-color:#222;margin:24px 0'>", unsafe_allow_html=True)
 
 # ── SLIDER WET/DRY ───────────────────────────────────
-st.markdown("<h3>🎚️ Intensité du traitement</h3>", unsafe_allow_html=True)
-st.markdown("<p style='color:#555;font-size:11px'>0% = voix brute &nbsp;|&nbsp; 100% = traitement complet</p>", unsafe_allow_html=True)
+st.markdown("<h3>🎚️ Réglages</h3>", unsafe_allow_html=True)
 
-wet_pct = st.slider(
-    "",
-    min_value=0,
-    max_value=100,
-    value=100,
-    step=5,
-    format="%d%%",
-    label_visibility="collapsed"
-)
+col_s1, col_s2, col_s3 = st.columns(3)
+with col_s1:
+    st.markdown("<p style='color:#ff3c3c;font-size:10px;letter-spacing:2px;margin-bottom:4px'>⚡ TRAITEMENT</p>", unsafe_allow_html=True)
+    st.markdown("<p style='color:#444;font-size:9px'>0% brut → 100% full</p>", unsafe_allow_html=True)
+    wet_pct = st.slider("wet", 0, 100, 100, 5, format="%d%%", label_visibility="collapsed")
+with col_s2:
+    st.markdown("<p style='color:#4488ff;font-size:10px;letter-spacing:2px;margin-bottom:4px'>🌊 REVERB</p>", unsafe_allow_html=True)
+    st.markdown("<p style='color:#444;font-size:9px'>Espace — plate courte</p>", unsafe_allow_html=True)
+    reverb_pct = st.slider("reverb", 0, 100, 20, 5, format="%d%%", label_visibility="collapsed")
+with col_s3:
+    st.markdown("<p style='color:#ff8c00;font-size:10px;letter-spacing:2px;margin-bottom:4px'>🔁 DELAY</p>", unsafe_allow_html=True)
+    st.markdown("<p style='color:#444;font-size:9px'>80ms — présence</p>", unsafe_allow_html=True)
+    delay_pct = st.slider("delay", 0, 100, 15, 5, format="%d%%", label_visibility="collapsed")
 
 wet = wet_pct / 100.0
+reverb_amount = reverb_pct / 100.0
+delay_amount  = delay_pct  / 100.0
 
 # ── TRAITEMENT ───────────────────────────────────────
 if st.button("⚡ TRAITER MA VOIX"):
@@ -559,7 +603,7 @@ if st.button("⚡ TRAITER MA VOIX"):
         prog.progress(80, text="🎧 Espace stéréo...")
         prog.progress(92, text="🛑 Limiteur final...")
 
-        left, right = traiter_prise(x, sr, a, wet)
+        left, right = traiter_prise(x, sr, a, wet, reverb_amount=reverb_amount, delay_amount=delay_amount)
 
         prog.progress(100, text="✅ Terminé !")
 
