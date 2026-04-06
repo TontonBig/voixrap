@@ -264,8 +264,7 @@ def traiter_prise(x, sr, a, wet=1.0, hpf_freq=100, comp_pct=0.5, presence_freq=3
 
     # 7. (graves gérés par HPF slider en étape 1 — rien à faire ici)
 
-    # 8. EQ boosts — présence slider + air
-    proc=apply_eq(proc,sr,float(presence_freq),1.,3.0*wet)  # boost +3dB à la fréquence choisie
+    # 8. EQ correctif air — automatique
     air_boost=3.5 if a['air']<3 else 2.
     proc=apply_high_shelf(proc,sr,10000,air_boost*wet)
 
@@ -274,6 +273,11 @@ def traiter_prise(x, sr, a, wet=1.0, hpf_freq=100, comp_pct=0.5, presence_freq=3
     ra2=rms_act(proc,sr); thr2=max(-32.,min(-6.,ra2-1.5))
     makeup2=4.+comp_pct*4.
     proc=apply_comp(proc,sr,thr2,ratio2,atk2,80,makeup2*wet,knee_db=2)
+
+    # 10. PRÉSENCE — APRÈS compression RVox
+    # Placé ici pour que la compression n efface pas le boost
+    # +4 dB à la fréquence choisie par le slider
+    proc=apply_eq(proc,sr,float(presence_freq),1.0,4.0*wet)
 
     # 10. UN SEUL peak normalize
     proc=peak_normalize(proc,-2.)
