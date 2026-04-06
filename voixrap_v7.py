@@ -231,13 +231,13 @@ def generer_diagnostic(a):
     if a['reverb']: diag.append(("🟡","Reverb de pièce","Ta pièce résonne"))
     return diag
 
-def traiter_prise(x, sr, a, wet=1.0, graves_db=-9, comp_pct=0.5, presence_db=2):
+def traiter_prise(x, sr, a, wet=1.0, hpf_freq=100, comp_pct=0.5, presence_freq=3500):
     if wet==0.0:
         left=peak_normalize(np.array(x,dtype=np.float32),-0.3); return left,left.copy()
     proc=x.copy()
 
-    # 1. HPF 80Hz
-    proc=apply_hpf(proc,sr,80,order=4)
+    # 1. HPF — fréquence controlée par le slider NETTOYAGE DES BASSES
+    proc=apply_hpf(proc,sr,float(hpf_freq),order=4)
 
     # 2. EQ correctif — boue et nasal
     mud=-5. if a['lo_mid']>35 else -3.
@@ -262,14 +262,10 @@ def traiter_prise(x, sr, a, wet=1.0, graves_db=-9, comp_pct=0.5, presence_db=2):
     # 6. Triple de-ess
     proc=apply_triple_deess(proc,sr,a)
 
-    # 7. Low shelf graves APRES compression — slider a un vrai impact
-    proc=apply_low_shelf(proc,sr,180,float(graves_db)*wet)
-    if graves_db<=-9:
-        extra=apply_hpf(proc,sr,120,order=2)
-        proc=(0.7*extra+0.3*proc).astype(np.float32)
+    # 7. (graves gérés par HPF slider en étape 1 — rien à faire ici)
 
     # 8. EQ boosts — présence slider + air
-    proc=apply_eq(proc,sr,3500,1.,float(presence_db)*wet)
+    proc=apply_eq(proc,sr,float(presence_freq),1.,3.0*wet)  # boost +3dB à la fréquence choisie
     air_boost=3.5 if a['air']<3 else 2.
     proc=apply_high_shelf(proc,sr,10000,air_boost*wet)
 
@@ -339,17 +335,17 @@ with col_s1:
     st.markdown("<p style='color:#444;font-size:9px'>0% brut → 100% full</p>",unsafe_allow_html=True)
     wet_pct=st.slider("wet",0,100,100,5,format="%d%%",label_visibility="collapsed")
 with col_s2:
-    st.markdown("<p style='color:#ff8c00;font-size:10px;letter-spacing:2px'>🔉 GRAVES</p>",unsafe_allow_html=True)
-    st.markdown("<p style='color:#444;font-size:9px'>Low shelf 180 Hz</p>",unsafe_allow_html=True)
-    graves_db=st.slider("graves",-12,0,-9,1,format="%d dB",label_visibility="collapsed")
+    st.markdown("<p style='color:#ff8c00;font-size:10px;letter-spacing:2px'>🧹 NETTOYAGE DES BASSES</p>",unsafe_allow_html=True)
+    st.markdown("<p style='color:#444;font-size:9px'>Plus haut = voix plus claire</p>",unsafe_allow_html=True)
+    hpf_freq=st.slider("hpf",30,180,100,5,format="%d Hz",label_visibility="collapsed")
 with col_s3:
     st.markdown("<p style='color:#ffd700;font-size:10px;letter-spacing:2px'>🗜️ COMPRESSION</p>",unsafe_allow_html=True)
     st.markdown("<p style='color:#444;font-size:9px'>Léger → Agressif</p>",unsafe_allow_html=True)
     comp_pct=st.slider("comp",0,100,50,5,format="%d%%",label_visibility="collapsed")
 with col_s4:
     st.markdown("<p style='color:#00ff88;font-size:10px;letter-spacing:2px'>✨ PRÉSENCE</p>",unsafe_allow_html=True)
-    st.markdown("<p style='color:#444;font-size:9px'>3.5 kHz</p>",unsafe_allow_html=True)
-    presence_db=st.slider("presence",-3,6,2,1,format="%d dB",label_visibility="collapsed")
+    st.markdown("<p style='color:#444;font-size:9px'>Plus haut = voix plus brillante</p>",unsafe_allow_html=True)
+    presence_freq=st.slider("presence",2000,6000,3500,100,format="%d Hz",label_visibility="collapsed")
 
 wet=wet_pct/100.
 
@@ -364,7 +360,7 @@ if st.button("⚡ TRAITER MA VOIX"):
         prog.progress(75,text="🔉 Coupe graves...")
         prog.progress(85,text="✨ EQ boosts + compression...")
         prog.progress(95,text="🛑 Limiteur final...")
-        left,right=traiter_prise(x,sr,a,wet,graves_db=graves_db,comp_pct=comp_pct/100,presence_db=presence_db)
+        left,right=traiter_prise(x,sr,a,wet,hpf_freq=hpf_freq,comp_pct=comp_pct/100,presence_freq=presence_freq)
         prog.progress(100,text="✅ Terminé !")
 
     mono_out=(left+right)*0.5
