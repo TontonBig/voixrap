@@ -102,24 +102,31 @@ def band_deess(x, sr, fc_low, fc_high, percentile=75, amount_db=-4.0):
 
 def apply_multiband(x, sr, a):
     proc=x.copy()
-    # Bande sub < 120Hz
-    sub_band=apply_lpf(x,sr,120,4)
-    sub_rms=rms_act(sub_band,sr)
-    sub_comp=apply_comp(sub_band,sr,sub_rms-2,8.,10,40,-4.,2)
+    # SUB < 120Hz — coupe adaptative
+    sub_band=apply_lpf(x,sr,120,4); sub_rms=rms_act(sub_band,sr)
+    if a['sub']>15:   sub_comp=apply_comp(sub_band,sr,sub_rms-1,10.,8,30,-6.,2)
+    elif a['sub']>8:  sub_comp=apply_comp(sub_band,sr,sub_rms-2,6.,10,40,-3.,2)
+    else:             sub_comp=apply_comp(sub_band,sr,sub_rms-3,4.,12,50,-1.,2)
     proc=(proc-sub_band+sub_comp).astype(np.float32)
-    # Bande lo-mid 120-500Hz
-    lo_band=apply_hpf(apply_lpf(proc,sr,500,4),sr,120,4)
-    lo_rms=rms_act(lo_band,sr)
-    mud_ratio=5. if a['lo_mid']>35 else 3.5
-    lo_comp=apply_comp(lo_band,sr,lo_rms-3,mud_ratio,12,80,0.,3)
-    if a['lo_mid']>35: lo_comp=(lo_comp*lin(-2.)).astype(np.float32)
+    # LO-MID 120-500Hz — BOUE PRINCIPALE
+    # Données réelles : 27% a 75% — coupe très agressive nécessaire
+    lo_band=apply_hpf(apply_lpf(proc,sr,500,4),sr,120,4); lo_rms=rms_act(lo_band,sr)
+    if a['lo_mid']>60:   mud_ratio=8.0; mud_cut=-8.0   # Tel extreme
+    elif a['lo_mid']>40: mud_ratio=6.0; mud_cut=-5.0   # Courant
+    elif a['lo_mid']>25: mud_ratio=4.0; mud_cut=-3.0   # Modere
+    else:                mud_ratio=2.5; mud_cut=-1.0   # Peu de boue
+    lo_comp=apply_comp(lo_band,sr,lo_rms-2,mud_ratio,10,60,mud_cut,3)
     proc=(proc-lo_band+lo_comp).astype(np.float32)
-    # Bande présence 2k-6kHz
-    pres_band=apply_hpf(apply_lpf(proc,sr,6000,4),sr,2000,4)
-    pres_rms=rms_act(pres_band,sr)
-    p_ratio=5. if a['presence']>30 else 3.
-    pres_comp=apply_comp(pres_band,sr,pres_rms-3,p_ratio,5,40,0.,2)
-    proc=(proc-pres_band+pres_comp).astype(np.float32)
+    # MID 500-2kHz — corps voix, compression légère
+    mid_band=apply_hpf(apply_lpf(proc,sr,2000,4),sr,500,4); mid_rms=rms_act(mid_band,sr)
+    mid_comp=apply_comp(mid_band,sr,mid_rms-4,2.5,15,100,0.,4)
+    proc=(proc-mid_band+mid_comp).astype(np.float32)
+    # PRESENCE 2k-6kHz — toutes les voix en manquent (0.3 a 3.3%)
+    # On comprime seulement si déjà agressive
+    if a['presence']>20:
+        pres_band=apply_hpf(apply_lpf(proc,sr,6000,4),sr,2000,4); pres_rms=rms_act(pres_band,sr)
+        pres_comp=apply_comp(pres_band,sr,pres_rms-3,4.,5,40,0.,2)
+        proc=(proc-pres_band+pres_comp).astype(np.float32)
     return proc
 
 def apply_triple_deess(x, sr, a):
