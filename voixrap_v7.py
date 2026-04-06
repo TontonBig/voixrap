@@ -231,7 +231,7 @@ def generer_diagnostic(a):
     if a['reverb']: diag.append(("🟡","Reverb de pièce","Ta pièce résonne"))
     return diag
 
-def traiter_prise(x, sr, a, wet=1.0, hpf_freq=100, comp_pct=0.5, presence_freq=3500):
+def traiter_prise(x, sr, a, wet=1.0, hpf_freq=100, comp_pct=0.5, presence_freq=3500, presence_gain=6):
     if wet==0.0:
         left=peak_normalize(np.array(x,dtype=np.float32),-0.3); return left,left.copy()
     proc=x.copy()
@@ -277,7 +277,7 @@ def traiter_prise(x, sr, a, wet=1.0, hpf_freq=100, comp_pct=0.5, presence_freq=3
     # 10. PRÉSENCE — APRÈS compression RVox
     # Placé ici pour que la compression n efface pas le boost
     # +4 dB à la fréquence choisie par le slider
-    proc=apply_eq(proc,sr,float(presence_freq),1.0,4.0*wet)
+    proc=apply_eq(proc,sr,float(presence_freq),1.0,float(presence_gain)*wet)
 
     # 10. UN SEUL peak normalize
     proc=peak_normalize(proc,-2.)
@@ -333,7 +333,7 @@ for emoji,titre,detail in diag:
 st.markdown("<hr style='border-color:#222;margin:24px 0'>", unsafe_allow_html=True)
 st.markdown("<h3>🎚️ Réglages</h3>", unsafe_allow_html=True)
 
-col_s1,col_s2,col_s3,col_s4=st.columns(4)
+col_s1,col_s2,col_s3,col_s4,col_s5=st.columns(5)
 with col_s1:
     st.markdown("<p style='color:#ff3c3c;font-size:10px;letter-spacing:2px'>⚡ TRAITEMENT</p>",unsafe_allow_html=True)
     st.markdown("<p style='color:#444;font-size:9px'>0% brut → 100% full</p>",unsafe_allow_html=True)
@@ -347,9 +347,13 @@ with col_s3:
     st.markdown("<p style='color:#444;font-size:9px'>Léger → Agressif</p>",unsafe_allow_html=True)
     comp_pct=st.slider("comp",0,100,50,5,format="%d%%",label_visibility="collapsed")
 with col_s4:
-    st.markdown("<p style='color:#00ff88;font-size:10px;letter-spacing:2px'>✨ PRÉSENCE</p>",unsafe_allow_html=True)
-    st.markdown("<p style='color:#444;font-size:9px'>Plus haut = voix plus brillante</p>",unsafe_allow_html=True)
+    st.markdown("<p style='color:#00ff88;font-size:10px;letter-spacing:2px'>✨ PRÉSENCE FREQ</p>",unsafe_allow_html=True)
+    st.markdown("<p style='color:#444;font-size:9px'>Zone à booster</p>",unsafe_allow_html=True)
     presence_freq=st.slider("presence",2000,6000,3500,100,format="%d Hz",label_visibility="collapsed")
+with col_s5:
+    st.markdown("<p style='color:#00ffcc;font-size:10px;letter-spacing:2px'>✨ PRÉSENCE GAIN</p>",unsafe_allow_html=True)
+    st.markdown("<p style='color:#444;font-size:9px'>Intensité du boost</p>",unsafe_allow_html=True)
+    presence_gain=st.slider("pgain",0,10,6,1,format="+%d dB",label_visibility="collapsed")
 
 wet=wet_pct/100.
 
@@ -364,7 +368,7 @@ if st.button("⚡ TRAITER MA VOIX"):
         prog.progress(75,text="🔉 Coupe graves...")
         prog.progress(85,text="✨ EQ boosts + compression...")
         prog.progress(95,text="🛑 Limiteur final...")
-        left,right=traiter_prise(x,sr,a,wet,hpf_freq=hpf_freq,comp_pct=comp_pct/100,presence_freq=presence_freq)
+        left,right=traiter_prise(x,sr,a,wet,hpf_freq=hpf_freq,comp_pct=comp_pct/100,presence_freq=presence_freq,presence_gain=presence_gain)
         prog.progress(100,text="✅ Terminé !")
 
     mono_out=(left+right)*0.5
