@@ -60,6 +60,24 @@ def peak_normalize(x, target_db=-0.3):
         return (x * tg / pk).astype(np.float32)
     return x
 
+def apply_low_shelf(x, sr, fc, gain_db):
+    """Low shelf — coupe tout ce qui est sous fc Hz, gain_db = intensité de la coupe."""
+    fc   = min(fc, sr / 2 * 0.95)
+    A    = 10 ** (gain_db / 40.)
+    w0   = 2 * np.pi * fc / sr
+    cosW = np.cos(w0)
+    sinW = np.sin(w0)
+    beta = np.sqrt(A) / 1.0  # Q fixe = 1.0
+    b0   = A * ((A+1) - (A-1)*cosW + beta*sinW)
+    b1   = 2*A * ((A-1) - (A+1)*cosW)
+    b2   = A * ((A+1) - (A-1)*cosW - beta*sinW)
+    a0   = (A+1) + (A-1)*cosW + beta*sinW
+    a1   = -2 * ((A-1) + (A+1)*cosW)
+    a2   = (A+1) + (A-1)*cosW - beta*sinW
+    b = np.array([b0/a0, b1/a0, b2/a0])
+    a = np.array([1., a1/a0, a2/a0])
+    return signal.lfilter(b, a, x).astype(np.float32)
+
 def apply_hpf(x, sr, fc):
     fc = min(fc, sr / 2 * 0.95)
     b, a = signal.butter(4, fc / (sr / 2), btype='highpass')
@@ -388,22 +406,20 @@ def traiter_prise(x, sr, a, wet=1.0, graves_db=-6, comp_pct=0.5, presence_db=2):
     proc = x.copy()
 
     # ── 1. HPF adaptatif ─────────────────────────────
-    # Plus agressif si beaucoup de sub
-    hpf_freq = 150 if a['sub'] > 15 else 100
+    hpf_freq = 120 if a['sub'] > 15 else 80
     proc = apply_hpf(proc, sr, hpf_freq)
 
-    # ── 2. EQ correctif adaptatif ────────────────────
-    # Coupe graves — contrôlée par le slider GRAVES
-    grave_cut = graves_db * wet  # slider de -12 à 0 dB
-    proc = apply_eq(proc, sr, a['grave_freq'], 1.2, grave_cut)
+    # ── 2. GRAVES — Low shelf à 180 Hz ───────────────
+    # Le slider contrôle l intensité de la coupe
+    # graves_db va de -12 à 0 dB → low shelf qui coupe tout sous 180 Hz
+    proc = apply_low_shelf(proc, sr, 180, float(graves_db) * wet)
 
-    # Coupe boue lo-mid adaptative
+    # Coupe lo-mid SÉPARÉE — 380 Hz (boue) — automatique
     if a['lo_mid'] > 30:
-        gain_mud = max(-8.0, -(a['lo_mid'] - 20) * 0.3)
-        proc = apply_eq(proc, sr, 380, 1.5, gain_mud * wet)
-
-    # Safety après coupures
-    proc = peak_normalize(proc, -0.5)
+        mud_cut = max(-10.0, -(a['lo_mid'] - 20) * 0.4)
+        proc = apply_eq(proc, sr, 380, 1.8, mud_cut * wet)
+    else:
+        proc = apply_eq(proc, sr, 380, 1.5, -3.0 * wet)
 
     # ── 3. Saturation harmonique ─────────────────────
     drive   = 4.0 if a['crest'] < 12 else 2.5
@@ -415,33 +431,34 @@ def traiter_prise(x, sr, a, wet=1.0, graves_db=-6, comp_pct=0.5, presence_db=2):
         amount = max(-8.0, -(a['sib_zone'] - 10) * 0.3)
         proc = apply_deesser(proc, sr, a['sib_freq'], amount * wet)
 
-    # ── 5. EQ boost présence — contrôlé par slider ───
-    proc = apply_eq(proc, sr, 3500, 1.0, presence_db * wet)
+    # ── 5. EQ boost présence — slider direct ─────────
+    # Pas de peak_normalize ici — on laisse le slider avoir un vrai impact
+    proc = apply_eq(proc, sr, 3500, 1.0, float(presence_db) * wet)
 
-    # Air / brillance adaptatif
+    # Air / brillance
     air_boost = 3.5 if a['air'] < 3 else 2.0
     proc = apply_eq(proc, sr, 10000, 0.8, air_boost * wet)
 
-    proc = peak_normalize(proc, -0.5)
-
     # ── 6. Compression 1 — Maintien ──────────────────
     # comp_pct 0.0=léger → 1.0=agressif
-    ratio1 = 2.0 + comp_pct * 2.0   # 2:1 à 4:1
-    atk1   = 20 - comp_pct * 15     # 20ms à 5ms
-    rel1   = 200 - comp_pct * 120   # 200ms à 80ms
+    ratio1 = 2.0 + comp_pct * 2.0
+    atk1   = 20 - comp_pct * 15
+    rel1   = 200 - comp_pct * 120
     ra1    = rms_act(proc, sr)
     thr1   = max(-32., min(-8., ra1 - 2.0))
-    proc   = apply_compressor(proc, sr, thr1, ratio1, atk1, rel1, 4 * wet)
+    mg1    = 3.0 + comp_pct * 3.0   # makeup gain qui suit l intensité
+    proc   = apply_compressor(proc, sr, thr1, ratio1, atk1, rel1, mg1 * wet)
 
     # ── 7. Compression 2 — RVox style ────────────────
-    ratio2 = 4.0 + comp_pct * 4.0   # 4:1 à 8:1
-    atk2   = 8 - comp_pct * 6       # 8ms à 2ms
+    ratio2 = 4.0 + comp_pct * 4.0
+    atk2   = 8 - comp_pct * 6
     ra2    = rms_act(proc, sr)
     thr2   = max(-32., min(-6., ra2 - 1.5))
     mg2    = max(2.0, min(14.0, (-10 - ra2) + (ra2 - thr2) * (1 - 1/ratio2)))
     proc   = apply_compressor(proc, sr, thr2, ratio2, atk2, 80, mg2 * wet)
 
-    # ── 8. Safety peak ───────────────────────────────
+    # ── 8. Safety peak UNIQUE ─────────────────────────
+    # Un seul normalize à la fin — pas entre chaque étape
     proc = peak_normalize(proc, -0.5)
 
     # ── 9. Widener ───────────────────────────────────
@@ -450,9 +467,6 @@ def traiter_prise(x, sr, a, wet=1.0, graves_db=-6, comp_pct=0.5, presence_db=2):
 
     # ── 10. Limiter stéréo ───────────────────────────
     left, right = apply_limiter_stereo(left, right, sr, -0.1)
-
-    # ── 11. LUFS normalize ───────────────────────────
-    left, right = normalize_lufs(left, right, sr, -10.0)
 
     # ── Wet/Dry mix ──────────────────────────────────
     if wet < 1.0:
@@ -529,8 +543,8 @@ with col_s1:
     st.markdown("<p style='color:#444;font-size:9px'>0% brut → 100% full</p>", unsafe_allow_html=True)
     wet_pct = st.slider("wet", 0, 100, 100, 5, format="%d%%", label_visibility="collapsed")
 with col_s2:
-    st.markdown("<p style='color:#ff8c00;font-size:10px;letter-spacing:2px;margin-bottom:4px'>🔉 GRAVES</p>", unsafe_allow_html=True)
-    st.markdown("<p style='color:#444;font-size:9px'>Coupe les basses</p>", unsafe_allow_html=True)
+    st.markdown("<p style='color:#ff8c00;font-size:10px;letter-spacing:2px;margin-bottom:4px'>🔉 GRAVES (140 Hz)</p>", unsafe_allow_html=True)
+    st.markdown("<p style='color:#444;font-size:9px'>Coupe les basses voix</p>", unsafe_allow_html=True)
     graves_db = st.slider("graves", -12, 0, -6, 1, format="%d dB", label_visibility="collapsed")
 with col_s3:
     st.markdown("<p style='color:#ffd700;font-size:10px;letter-spacing:2px;margin-bottom:4px'>🗜️ COMPRESSION</p>", unsafe_allow_html=True)
